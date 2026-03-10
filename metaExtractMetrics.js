@@ -2,15 +2,17 @@
 
 console.clear();
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const CONFIG = {
   varUserAccessToken: "",
-  varStartDate: "2026-03-01",
+  varStartDate: "202-03-01",
   varEndDate: "2026-03-09",
   varGranularity: "DAILY",
   varGraphVersion: "v23.0",
   varBusinessManagers: ["1801828990029185", "385352783664075"],
 };
-//const varRange = CONFIG.varStartDate + " a " + CONFIG.varEndDate;
 
 function logLine(message) {
   console.log(`\n${message}`);
@@ -42,7 +44,7 @@ function normalizePhoneNumber(rawPhone) {
 
 async function fetchJson(url, varUserAccessToken) {
   const response = await fetch(url, {
-    method: "GET",
+    method: 'GET',
     headers: buildHeaders(varUserAccessToken),
   });
 
@@ -88,7 +90,7 @@ function buildMetricsUrl(varWabaID, varStartDateUnix, varEndDateUnix) {
     `.granularity(${CONFIG.varGranularity})`,
     `.metric_types(VOLUME)`,
     `.dimensions(COUNTRY,PHONE,PRICING_CATEGORY,PRICING_TYPE,TIER)`,
-  ].join("");
+  ].join('');
 
   return `https://graph.facebook.com/${CONFIG.varGraphVersion}/${varWabaID}?fields=${encodeURIComponent(fields)}`;
 }
@@ -102,8 +104,8 @@ async function loadWabas(varUserAccessToken) {
 
     const mappedItems = items.map((item) => ({
       varBusinessManagerID,
-      wabaID: item?.id ?? "",
-      wabaName: item?.name ?? "",
+      wabaID: item?.id ?? '',
+      wabaName: item?.name ?? '',
     }));
 
     totalsByBusinessManager[varBusinessManagerID] = mappedItems.length;
@@ -123,14 +125,12 @@ async function loadPhonesForWaba(waba, varUserAccessToken) {
     const phones = await fetchAllPages(buildPhoneNumbersUrl(waba.wabaID), varUserAccessToken);
 
     if (!phones.length) {
-      return [
-        {
-          varBusinessManagerID: waba.varBusinessManagerID,
-          wabaID: waba.wabaID,
-          wabaName: waba.wabaName,
-          Telefone: "Sem métricas",
-        },
-      ];
+      return [{
+        varBusinessManagerID: waba.varBusinessManagerID,
+        wabaID: waba.wabaID,
+        wabaName: waba.wabaName,
+        Telefone: 'Sem métricas',
+      }];
     }
 
     return phones.map((phone) => ({
@@ -142,14 +142,12 @@ async function loadPhonesForWaba(waba, varUserAccessToken) {
   } catch (error) {
     logLine(`Erro ao consultar telefones da WABA ${waba.wabaID}: ${error.message}`);
 
-    return [
-      {
-        varBusinessManagerID: waba.varBusinessManagerID,
-        wabaID: waba.wabaID,
-        wabaName: waba.wabaName,
-        Telefone: "Sem métricas",
-      },
-    ];
+    return [{
+      varBusinessManagerID: waba.varBusinessManagerID,
+      wabaID: waba.wabaID,
+      wabaName: waba.wabaName,
+      Telefone: 'Sem métricas',
+    }];
   }
 }
 
@@ -200,7 +198,7 @@ function groupReportRows(rows) {
       row.Telefone,
       row.Range,
       row.Categoria,
-    ].join("||");
+    ].join('||');
 
     if (!groupedRows.has(key)) {
       groupedRows.set(key, { ...row });
@@ -216,7 +214,7 @@ function groupReportRows(rows) {
 function buildZeroMetricRows(waba, phonesByWaba, varStartDateUnix, varRange) {
   const phones = phonesByWaba.has(waba.wabaID)
     ? Array.from(phonesByWaba.get(waba.wabaID))
-    : ["Sem métricas"];
+    : ['Sem métricas'];
 
   return phones.map((Telefone) => ({
     varBusinessManagerID: waba.varBusinessManagerID,
@@ -224,15 +222,13 @@ function buildZeroMetricRows(waba, phonesByWaba, varStartDateUnix, varRange) {
     wabaName: waba.wabaName,
     Telefone,
     Range: varRange,
-    Categoria: "Sem métricas",
+    Categoria: 'Sem métricas',
     Quantidade: 0,
   }));
 }
 
 async function loadMetricsForWaba(waba, phonesByWaba, varUserAccessToken, varStartDateUnix, varEndDateUnix, varRange) {
   try {
-	 
-	 //console.log( "Range: " + varRange);
     const payload = await fetchJson(
       buildMetricsUrl(waba.wabaID, varStartDateUnix, varEndDateUnix),
       varUserAccessToken
@@ -250,7 +246,7 @@ async function loadMetricsForWaba(waba, phonesByWaba, varUserAccessToken, varSta
       wabaName: waba.wabaName,
       Telefone: normalizePhoneNumber(dataPoint?.phone_number),
       Range: varRange,
-      Categoria: String(dataPoint?.pricing_category ?? "Sem métricas"),
+      Categoria: String(dataPoint?.pricing_category ?? 'Sem métricas'),
       Quantidade: Number(dataPoint?.volume) || 0,
     }));
 
@@ -281,25 +277,96 @@ async function loadMetrics(varWabaList, varWabaListPhones, varUserAccessToken, v
   return varReportList;
 }
 
+function escapeCsvValue(value) {
+  const stringValue = String(value ?? '').replace(/;/g, ',');
+  return stringValue;
+}
+
+function buildCsvContent(varReportList) {
+  const lines = [
+    'BM_ID;wabaID;wabaName;Telefone;Range;Categoria;Quantidade',
+  ];
+
+  for (const row of varReportList) {
+    lines.push([
+      escapeCsvValue(row.varBusinessManagerID),
+      escapeCsvValue(row.wabaID),
+      escapeCsvValue(row.wabaName),
+      escapeCsvValue(row.Telefone),
+      escapeCsvValue(row.Range),
+      escapeCsvValue(row.Categoria),
+      escapeCsvValue(row.Quantidade),
+    ].join(';'));
+  }
+
+  return lines.join('\n');
+}
+
+function getTodayFilePrefix() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getUniqueOutputFilePath() {
+  const baseName = `${getTodayFilePrefix()}-MetaMetricsOutput.csv`;
+  const initialPath = path.join(process.cwd(), baseName);
+
+  if (!fs.existsSync(initialPath)) {
+    return initialPath;
+  }
+
+  let suffix = 1;
+
+  while (true) {
+    const candidateName = `${getTodayFilePrefix()}-MetaMetricsOutput-${String(suffix).padStart(2, '0')}.csv`;
+    const candidatePath = path.join(process.cwd(), candidateName);
+
+    if (!fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+
+    suffix += 1;
+  }
+}
+
+function saveReportCsv(varReportList) {
+  const outputFilePath = getUniqueOutputFilePath();
+  const csvContent = buildCsvContent(varReportList);
+
+  fs.writeFileSync(outputFilePath, csvContent, 'utf8');
+  logLine(`Arquivo CSV gerado: ${outputFilePath}`);
+  return outputFilePath;
+}
+
 function printReportTable(varReportList) {
-  logLine("Conteudo do varReportList:");
+  logLine('Conteudo do varReportList:');
   console.log("BM_ID;wabaID;wabaName;Telefone;Range;Categoria;Quantidade");
 
   for (const row of varReportList) {
-    const safeName = String(row.wabaName ?? "").replace(/;/g, ",");
-    const safeCategory = String(row.Categoria ?? "").replace(/;/g, ",");
-    console.log(
-      `${row.varBusinessManagerID};${row.wabaID};${safeName};${row.Telefone};${row.Range};${safeCategory};${row.Quantidade}`
-    );
+    console.log([
+      escapeCsvValue(row.varBusinessManagerID),
+      escapeCsvValue(row.wabaID),
+      escapeCsvValue(row.wabaName),
+      escapeCsvValue(row.Telefone),
+      escapeCsvValue(row.Range),
+      escapeCsvValue(row.Categoria),
+      escapeCsvValue(row.Quantidade),
+    ].join(';'));
   }
 }
 
 async function main() {
+  if (!CONFIG.varUserAccessToken) {
+    throw new Error('Preencha CONFIG.varUserAccessToken com um token valido antes de executar.');
+  }
+
   const varStartDateUnix = toUnixTimestamp(CONFIG.varStartDate);
   const varEndDateUnix = toUnixTimestamp(CONFIG.varEndDate, true);
 
   const varRange = CONFIG.varStartDate + " a " + CONFIG.varEndDate;
-  //console.log( "Range: " + varRange);
 
   logLine(`varStartDateUnix: ${varStartDateUnix}`);
   logLine(`varEndDateUnix: ${varEndDateUnix}`);
@@ -316,6 +383,7 @@ async function main() {
   );
 
   printReportTable(varReportList);
+  saveReportCsv(varReportList);
 }
 
 main().catch((error) => {
